@@ -6,13 +6,13 @@ import { CartProvider } from '@/contexts/CartContext';
 import { CollectionProvider } from '@/contexts/CollectionContext';
 import CartDrawer from '@/components/CartDrawer';
 import { Header } from '@/components/Header';
-import { CollectionNav } from '@/components/CollectionNav';
+import { CollectionNavWrapper } from '@/components/CollectionNavWrapper';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Cá Hồi Cá',
-  description: 'Cá hồi tươi sống nhập khẩu',
+  title: 'Cahoi Coba',
+  description: 'Cahoi Coba - Nhà hàng ẩm thực Việt Nam',
 };
 
 export default function RootLayout({
@@ -28,7 +28,7 @@ export default function RootLayout({
             <CollectionProvider>
               <div className="min-h-screen flex flex-col">
                 <Header />
-                <CollectionNav />
+                <CollectionNavWrapper />
                 <main className="flex-grow pt-28">
                   {children}
                 </main>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/contexts/CartContext';
 import { formatPrice } from '@/lib/utils';
@@ -54,6 +54,16 @@ const customStyles = `
   }
 `;
 
+interface FormData {
+  fullName: string;
+  phoneNumber: string;
+  address: string;
+  company: string;
+  city: string;
+  district: string;
+  ward: string;
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, loadCart } = useCart();
@@ -67,11 +77,14 @@ export default function CheckoutPage() {
   const [selectedDate, setSelectedDate] = useState('');
   const [shippingMethods, setShippingMethods] = useState<any[]>([]);
   const [selectedShippingMethod, setSelectedShippingMethod] = useState<any>(null);
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<FormData>({
     fullName: '',
     phoneNumber: '',
     address: '',
-    company: ''
+    company: '',
+    city: '',
+    district: '',
+    ward: ''
   });
   const [storeAddress, setStoreAddress] = useState<any>(null);
 
@@ -354,40 +367,8 @@ export default function CheckoutPage() {
     
     if (method === 'pickup' && storeAddress) {
       try {
-        // Phân tách địa chỉ cửa hàng thành các phần
-        const addressParts = storeAddress.split(', ');
-        const streetAndNumber = addressParts[0];
-        const ward = addressParts[1];
-        const district = addressParts[2];
-        const city = addressParts[3];
-
-        // Tạo địa chỉ gửi hàng từ địa chỉ cửa hàng
-        const shippingAddress = {
-          fullName: formData.fullName,
-          phoneNumber: formData.phoneNumber,
-          streetLine1: `${streetAndNumber}, ${ward}, ${district}`.trim(),
-          streetLine2: '',
-          city: city,
-          province: city,
-          postalCode: '',
-          countryCode: 'VN',
-          company: ''
-        };
-
-        // Log dữ liệu địa chỉ trước khi gửi
-        console.log('=== Dữ liệu địa chỉ cửa hàng chuẩn bị gửi về backend ===');
-        console.log('1. Thông tin khách hàng:');
-        console.log('- Họ tên:', shippingAddress.fullName);
-        console.log('- Số điện thoại:', shippingAddress.phoneNumber);
-        console.log('2. Thông tin địa chỉ:');
-        console.log('- Địa chỉ cửa hàng:', shippingAddress.streetLine1);
-        console.log('- Thành phố:', shippingAddress.city);
-        console.log('- Mã bưu điện:', shippingAddress.postalCode);
-        console.log('- Mã quốc gia:', shippingAddress.countryCode);
-        console.log('3. Địa chỉ đầy đủ:', shippingAddress);
-        console.log('=============================================');
-
-        const result = await fetch(process.env.NEXT_PUBLIC_SHOP_API_URL!, {
+        // Lấy danh sách shipping methods trước
+        const shippingMethodsResult = await fetch(process.env.NEXT_PUBLIC_SHOP_API_URL!, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -396,53 +377,185 @@ export default function CheckoutPage() {
           credentials: 'include',
           body: JSON.stringify({
             query: `
-              mutation SetOrderShippingAddress($input: CreateAddressInput!) {
-                setOrderShippingAddress(input: $input) {
-                  ... on Order {
-                    id
-                    shippingAddress {
-                      fullName
-                      streetLine1
-                      streetLine2
-                      city
-                      province
-                      postalCode
-                      phoneNumber
-                      company
-                    }
-                  }
-                  ... on ErrorResult {
-                    errorCode
-                    message
-                  }
+              query {
+                eligibleShippingMethods {
+                  id
+                  code
+                  name
+                  description
+                  price
+                  priceWithTax
                 }
               }
-            `,
-            variables: {
-              input: shippingAddress
-            }
+            `
           })
         });
 
-        const response = await result.json();
+        const shippingMethodsResponse = await shippingMethodsResult.json();
         
-        if (response.errors) {
-          throw new Error(response.errors[0].message);
+        if (shippingMethodsResponse.errors) {
+          throw new Error(shippingMethodsResponse.errors[0].message);
         }
 
-        if (response.data?.setOrderShippingAddress) {
-          // Cập nhật formData sau khi API thành công
-          setFormData(prev => ({
-            ...prev,
-            address: `${streetAndNumber}, ${ward}, ${district}`
-          }));
-          
-          setShippingAddress(response.data.setOrderShippingAddress.shippingAddress);
-          setError(null);
+        // Tìm phương thức 'nhan-tai-cua-hang'
+        if (shippingMethodsResponse.data?.eligibleShippingMethods) {
+          const pickupMethod = shippingMethodsResponse.data.eligibleShippingMethods.find(
+            (method: any) => method.code === 'nhan-tai-cua-hang'
+          );
+
+          if (pickupMethod) {
+            console.log('Đang set shipping method:', pickupMethod);
+            // Set shipping method trước
+            const setShippingResult = await fetch(process.env.NEXT_PUBLIC_SHOP_API_URL!, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'vendure-token': process.env.NEXT_PUBLIC_VENDURE_TOKEN || ''
+              },
+              credentials: 'include',
+              body: JSON.stringify({
+                query: `
+                  mutation SetShippingMethod($shippingMethodId: [ID!]!) {
+                    setOrderShippingMethod(shippingMethodId: $shippingMethodId) {
+                      ... on Order {
+                        id
+                        code
+                        state
+                        total
+                        totalWithTax
+                        shipping
+                        shippingWithTax
+                      }
+                      ... on ErrorResult {
+                        errorCode
+                        message
+                      }
+                    }
+                  }
+                `,
+                variables: {
+                  shippingMethodId: [pickupMethod.id]
+                }
+              })
+            });
+
+            const setShippingResponse = await setShippingResult.json();
+            
+            if (setShippingResponse.errors) {
+              throw new Error(setShippingResponse.errors[0].message);
+            }
+
+            if (setShippingResponse.data?.setOrderShippingMethod) {
+              console.log('Kết quả set shipping method:', setShippingResponse.data.setOrderShippingMethod);
+              
+              // Cập nhật order với thông tin mới
+              setOrder((prevOrder: any) => ({
+                ...prevOrder,
+                ...setShippingResponse.data.setOrderShippingMethod
+              }));
+              
+              // Phân tách địa chỉ cửa hàng thành các phần
+              const addressParts = storeAddress.split(', ');
+              const streetAndNumber = addressParts[0];
+              const ward = addressParts[1];
+              const district = addressParts[2];
+              const city = addressParts[3];
+
+              // Tạo địa chỉ gửi hàng từ địa chỉ cửa hàng
+              const shippingAddress = {
+                fullName: formData.fullName,
+                phoneNumber: formData.phoneNumber,
+                streetLine1: `${streetAndNumber}, ${ward}, ${district}`.trim(),
+                streetLine2: '',
+                city: city,
+                province: city,
+                postalCode: '',
+                countryCode: 'VN',
+                company: ''
+              };
+
+              // Log dữ liệu địa chỉ trước khi gửi
+              console.log('=== Dữ liệu địa chỉ cửa hàng chuẩn bị gửi về backend ===');
+              console.log('1. Thông tin khách hàng:');
+              console.log('- Họ tên:', shippingAddress.fullName);
+              console.log('- Số điện thoại:', shippingAddress.phoneNumber);
+              console.log('2. Thông tin địa chỉ:');
+              console.log('- Địa chỉ cửa hàng:', shippingAddress.streetLine1);
+              console.log('- Thành phố:', shippingAddress.city);
+              console.log('- Mã bưu điện:', shippingAddress.postalCode);
+              console.log('- Mã quốc gia:', shippingAddress.countryCode);
+              console.log('3. Địa chỉ đầy đủ:', shippingAddress);
+              console.log('=============================================');
+
+              // Set địa chỉ
+              const addressResult = await fetch(process.env.NEXT_PUBLIC_SHOP_API_URL!, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'vendure-token': process.env.NEXT_PUBLIC_VENDURE_TOKEN || ''
+                },
+                credentials: 'include',
+                body: JSON.stringify({
+                  query: `
+                    mutation SetOrderShippingAddress($input: CreateAddressInput!) {
+                      setOrderShippingAddress(input: $input) {
+                        ... on Order {
+                          id
+                          shippingAddress {
+                            fullName
+                            streetLine1
+                            streetLine2
+                            city
+                            province
+                            postalCode
+                            phoneNumber
+                            company
+                          }
+                        }
+                        ... on ErrorResult {
+                          errorCode
+                          message
+                        }
+                      }
+                    }
+                  `,
+                  variables: {
+                    input: shippingAddress
+                  }
+                })
+              });
+
+              const addressResponse = await addressResult.json();
+              
+              if (addressResponse.errors) {
+                throw new Error(addressResponse.errors[0].message);
+              }
+
+              if (addressResponse.data?.setOrderShippingAddress) {
+                // Cập nhật formData sau khi API thành công
+                setFormData(prev => ({
+                  ...prev,
+                  address: `${streetAndNumber}, ${ward}, ${district}`
+                }));
+                
+                setShippingAddress(addressResponse.data.setOrderShippingAddress.shippingAddress);
+                setError(null);
+              }
+            }
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Lỗi khi cập nhật địa chỉ cửa hàng');
         console.error('Error setting store address:', err);
+      }
+    } else if (method === 'delivery') {
+      // Reset shipping methods và selected shipping method
+      setShippingMethods([]);
+      setSelectedShippingMethod(null);
+      
+      // Nếu có địa chỉ, lấy lại shipping methods
+      if (formData.address && formData.city && formData.district) {
+        await fetchShippingMethods();
       }
     }
   };
@@ -527,11 +640,17 @@ export default function CheckoutPage() {
           fullName: shippingAddress.fullName,
           phoneNumber: shippingAddress.phoneNumber,
           address: shippingAddress.streetLine1,
-          company: shippingAddress.company
+          company: shippingAddress.company,
+          city: shippingAddress.city,
+          district: shippingAddress.province,
+          ward: shippingAddress.streetLine2 || 'Phường 5' // Thêm giá trị mặc định cho ward
         }));
         
         setShippingAddress(response.data.setOrderShippingAddress.shippingAddress);
         setError(null);
+
+        // Gọi fetchShippingMethods ngay sau khi cập nhật địa chỉ
+        await fetchShippingMethods();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Lỗi khi cập nhật địa chỉ');
@@ -540,7 +659,7 @@ export default function CheckoutPage() {
   };
 
   // Thêm hàm lấy shipping methods
-  const fetchShippingMethods = async () => {
+  const fetchShippingMethods = useCallback(async () => {
     try {
       console.log('Đang lấy shipping methods...');
       const result = await fetch(process.env.NEXT_PUBLIC_SHOP_API_URL!, {
@@ -555,6 +674,7 @@ export default function CheckoutPage() {
             query {
               eligibleShippingMethods {
                 id
+                code
                 name
                 description
                 price
@@ -574,18 +694,35 @@ export default function CheckoutPage() {
       console.log('Shipping methods nhận được:', response.data?.eligibleShippingMethods);
 
       if (response.data?.eligibleShippingMethods) {
-        setShippingMethods(response.data.eligibleShippingMethods);
+        // Lọc bỏ phương thức 'nhan-tai-cua-hang'
+        const filteredMethods = response.data.eligibleShippingMethods.filter(
+          (method: any) => method.code !== 'nhan-tai-cua-hang'
+        );
+        setShippingMethods(filteredMethods);
+        
         // Chọn phương thức đầu tiên làm mặc định
-        if (response.data.eligibleShippingMethods.length > 0) {
-          setSelectedShippingMethod(response.data.eligibleShippingMethods[0]);
+        if (filteredMethods.length > 0) {
+          const firstMethod = filteredMethods[0];
+          setSelectedShippingMethod(firstMethod);
+          
           // Tự động set shipping method cho order
-          await handleShippingMethodSelect(response.data.eligibleShippingMethods[0].id);
+          await handleShippingMethodSelect(firstMethod.id);
         }
       }
     } catch (err) {
       console.error('Lỗi khi lấy shipping methods:', err);
     }
-  };
+  }, []);
+
+  // Thêm useEffect để lấy shipping methods khi có địa chỉ
+  useEffect(() => {
+    const { address, city, district, ward } = formData;
+    console.log('Địa chỉ hiện tại:', { address, city, district, ward });
+    if (deliveryMethod === 'delivery' && address && city && district && ward) {
+      console.log('Có địa chỉ, đang lấy shipping methods...');
+      fetchShippingMethods();
+    }
+  }, [formData.address, formData.city, formData.district, formData.ward, deliveryMethod, fetchShippingMethods]);
 
   // Thêm hàm kiểm tra order
   const checkOrder = async () => {
@@ -725,14 +862,6 @@ export default function CheckoutPage() {
     }
   };
 
-  // Thêm useEffect để lấy shipping methods khi có địa chỉ
-  useEffect(() => {
-    if (shippingAddress) {
-      console.log('Có địa chỉ, đang lấy shipping methods...');
-      fetchShippingMethods();
-    }
-  }, [shippingAddress]);
-
   if (loading) {
     return <div className="container mx-auto px-4 py-8">Đang tải...</div>;
   }
@@ -763,26 +892,6 @@ export default function CheckoutPage() {
       <div className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div>
-            {/* Phương thức giao hàng */}
-            <div className="mb-8">
-              <select
-                value={deliveryMethod}
-                onChange={(e) => handleDeliveryMethodChange(e.target.value as 'delivery' | 'pickup')}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="delivery">Giao hàng tận nơi</option>
-                <option value="pickup">Nhận tại cửa hàng</option>
-              </select>
-            </div>
-
-            {/* Hiển thị địa chỉ cửa hàng khi chọn pickup */}
-            {deliveryMethod === 'pickup' && storeAddress && (
-              <div className="mb-8 bg-gray-50 rounded-lg p-4">
-                <h3 className="text-lg font-semibold mb-2">Địa chỉ cửa hàng</h3>
-                <p className="text-gray-700">{storeAddress}</p>
-              </div>
-            )}
-
             {/* Thông tin khách hàng */}
             <div className="mb-8">
               <h2 className="text-lg font-semibold mb-4">Thông tin khách hàng</h2>
@@ -821,8 +930,32 @@ export default function CheckoutPage() {
                     required
                   />
                 </div>
+
+                {/* Phương thức giao hàng */}
+                <div>
+                  <label htmlFor="deliveryMethod" className="block text-sm font-medium text-gray-700 mb-1">
+                    Phương thức giao hàng
+                  </label>
+                  <select
+                    id="deliveryMethod"
+                    value={deliveryMethod}
+                    onChange={(e) => handleDeliveryMethodChange(e.target.value as 'delivery' | 'pickup')}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value="delivery">Giao hàng tận nơi</option>
+                    <option value="pickup">Nhận tại cửa hàng</option>
+                  </select>
+                </div>
               </div>
             </div>
+
+            {/* Hiển thị địa chỉ cửa hàng khi chọn pickup */}
+            {deliveryMethod === 'pickup' && storeAddress && (
+              <div className="mb-8 bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold mb-2">Địa chỉ cửa hàng</h3>
+                <p className="text-gray-700">{storeAddress}</p>
+              </div>
+            )}
 
             {/* Form địa chỉ giao hàng */}
             {deliveryMethod === 'delivery' && (
@@ -887,7 +1020,7 @@ export default function CheckoutPage() {
             </div>
 
             {/* Phương thức vận chuyển */}
-            {deliveryMethod === 'delivery' && shippingMethods.length > 0 && (
+            {deliveryMethod === 'delivery' && formData.address && formData.city && formData.district && shippingMethods.length > 0 && (
               <div className="mb-8">
                 <h2 className="text-lg font-semibold mb-4">Phương thức vận chuyển</h2>
                 <div className="space-y-4">
@@ -904,13 +1037,9 @@ export default function CheckoutPage() {
                       <div className="flex justify-between items-center">
                         <div>
                           <h3 className="font-medium">{method.name}</h3>
-                          {method.description && (
-                            <p className="text-sm text-gray-600">{method.description}</p>
-                          )}
+                          <p className="text-sm text-gray-500">{method.description}</p>
                         </div>
-                        <div className="text-right">
-                          <p className="font-medium">{formatPrice(method.priceWithTax)}</p>
-                        </div>
+                        <p className="font-medium">{formatPrice(method.priceWithTax)}</p>
                       </div>
                     </div>
                   ))}
